@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+
+# Environment
+.env
+
+# IDE
+.idea/
+.vscode/
+
+# Downloads / temp
+downloads/
+*.mp4
+*.log
