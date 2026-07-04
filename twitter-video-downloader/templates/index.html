@@ -1,0 +1,676 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<!-- 关键: 推特 CDN(video.twimg.com) 会对带第三方 Referer 的请求返回 403,
+     必须全局禁止发送 Referer, 页面内播放/直链下载才能正常 -->
+<meta name="referrer" content="no-referrer">
+<title>推特视频下载器 - 在线解析 X/Twitter 视频</title>
+<style>
+  /* 设计体系: 单色墨色系(参考 Vercel/Linear) —
+     黑白灰高对比、无渐变、1px 发丝线代替阴影、紧凑字距、克制动效
+     字体: Geist(Vercel 开源, 自托管可变字体), 中文回退系统字体 */
+  @font-face {
+    font-family: "Geist";
+    src: url("/static/fonts/Geist-Variable.woff2") format("woff2");
+    font-weight: 100 900;
+    font-display: swap;
+  }
+  @font-face {
+    font-family: "Geist Mono";
+    src: url("/static/fonts/GeistMono-Variable.woff2") format("woff2");
+    font-weight: 100 900;
+    font-display: swap;
+  }
+  :root {
+    --bg: #fafafa;
+    --card: #ffffff;
+    --card-hover: #f4f4f5;
+    --fg: #171717;
+    --fg-inverse: #fafafa;
+    --text-dim: #71717a;
+    --border: #e4e4e7;
+    --border-strong: #d4d4d8;
+    --danger: #dc2626;
+    --danger-bg: rgba(220,38,38,.06);
+    --success: #15803d;
+    --warn-bg: #fefce8;
+    --warn-border: #eadfa3;
+    --warn-text: #854d0e;
+    --radius: 8px;
+    /* 间距刻度: 4px 基准, 全页仅使用这组值 */
+    --sp-1: 4px;
+    --sp-2: 8px;
+    --sp-3: 12px;
+    --sp-4: 16px;
+    --sp-5: 24px;
+    --sp-6: 32px;
+    --sp-7: 48px;
+    --sp-8: 64px;
+  }
+  [data-theme="dark"] {
+    --bg: #0a0a0a;
+    --card: #111111;
+    --card-hover: #1a1a1a;
+    --fg: #ededed;
+    --fg-inverse: #0a0a0a;
+    --text-dim: #a1a1aa;
+    --border: #262626;
+    --border-strong: #333333;
+    --danger: #f87171;
+    --danger-bg: rgba(248,113,113,.07);
+    --success: #4ade80;
+    --warn-bg: #1c1917;
+    --warn-border: #44403c;
+    --warn-text: #d6c8a1;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    font-family: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+                 "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    font-feature-settings: "ss01", "cv05";
+    background: var(--bg);
+    color: var(--fg);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 96px var(--sp-4) var(--sp-8);
+    transition: background .25s, color .25s;
+  }
+
+  /* ---------- 顶部导航栏 ---------- */
+  .toolbar {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 50;
+    display: flex; justify-content: space-between; align-items: center;
+    padding: var(--sp-3) var(--sp-5);
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+  }
+  .brand { display: flex; align-items: center; gap: var(--sp-3); min-width: 0; }
+  .logo-badge {
+    width: 28px; height: 28px; border-radius: 7px; flex-shrink: 0;
+    display: grid; place-items: center;
+    background: var(--fg);
+  }
+  .logo-badge svg { width: 14px; height: 14px; fill: var(--fg-inverse); }
+  .brand h1 {
+    font-size: 15px; font-weight: 600; letter-spacing: -0.02em;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .toolbar-actions { display: flex; align-items: center; gap: var(--sp-2); flex-shrink: 0; }
+  .tool-btn, .lang-select {
+    height: 32px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: transparent;
+    color: var(--fg);
+    font-size: 13px;
+    cursor: pointer;
+    transition: border-color .15s, background .15s;
+  }
+  .tool-btn { width: 32px; display: grid; place-items: center; }
+  .tool-btn svg { width: 15px; height: 15px; stroke: currentColor; fill: none; stroke-width: 1.8; }
+  .tool-btn:hover, .lang-select:hover { border-color: var(--border-strong); background: var(--card-hover); }
+  .lang-select { padding: 0 10px; appearance: none; -webkit-appearance: none; outline: none; }
+
+  /* ---------- 主标题区 ---------- */
+  .hero { display: flex; flex-direction: column; align-items: center; margin-bottom: var(--sp-7); }
+  .eyebrow {
+    font-family: "Geist Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 12px; font-weight: 500;
+    letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: var(--sp-2) var(--sp-4);
+    margin-bottom: var(--sp-5);
+  }
+  .hero-title {
+    font-size: clamp(40px, 7vw, 72px);
+    font-weight: 640;
+    letter-spacing: -0.055em;
+    line-height: 1.02;
+    text-align: center;
+    max-width: 760px;
+    margin-bottom: var(--sp-4);
+    text-wrap: balance;
+    font-variation-settings: "opsz" 32;
+  }
+  .hero-title .dim { color: var(--text-dim); font-weight: 480; letter-spacing: -0.04em; }
+  .subtitle {
+    color: var(--text-dim); font-size: 15.5px;
+    text-align: center; line-height: 1.75; letter-spacing: 0;
+    max-width: 540px;
+  }
+
+  /* ---------- 搜索区 ---------- */
+  .search-box {
+    width: 100%; max-width: 640px;
+    display: flex; gap: var(--sp-2);
+  }
+  .search-box input {
+    flex: 1; min-width: 0;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 0 var(--sp-4);
+    height: 44px;
+    color: var(--fg);
+    font-size: 14px;
+    outline: none;
+    transition: border-color .15s;
+  }
+  .search-box input:focus { border-color: var(--fg); }
+  .search-box input::placeholder { color: var(--text-dim); }
+  .btn {
+    height: 44px;
+    border: 1px solid var(--fg);
+    border-radius: var(--radius);
+    background: var(--fg);
+    color: var(--fg-inverse);
+    font-size: 14px; font-weight: 500;
+    padding: 0 22px; cursor: pointer;
+    transition: opacity .15s;
+    white-space: nowrap;
+  }
+  .btn:hover { opacity: .82; }
+  .btn:disabled { opacity: .4; cursor: not-allowed; }
+
+  .hint { color: var(--text-dim); font-size: 12.5px; margin-top: var(--sp-4); text-align: center; line-height: 2.1; }
+  .hint code {
+    background: var(--card); padding: 2px var(--sp-2); border-radius: 5px;
+    border: 1px solid var(--border); font-size: 11.5px;
+    font-family: "Geist Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+
+  /* ---------- 中转开关 ---------- */
+  .proxy-row {
+    display: flex; align-items: center; gap: var(--sp-3);
+    margin-top: var(--sp-5); cursor: pointer; user-select: none;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--card);
+    padding: var(--sp-3) var(--sp-4);
+    transition: border-color .15s;
+    max-width: 640px; width: 100%;
+  }
+  .proxy-row:hover { border-color: var(--border-strong); }
+  .switch { position: relative; display: inline-block; width: 36px; height: 20px; flex-shrink: 0; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .slider {
+    position: absolute; inset: 0; border-radius: 999px;
+    background: var(--border-strong); transition: background .15s;
+  }
+  .slider::before {
+    content: ""; position: absolute; left: 2px; top: 2px;
+    width: 16px; height: 16px; border-radius: 50%;
+    background: var(--card); transition: transform .15s;
+  }
+  .switch input:checked + .slider { background: var(--fg); }
+  .switch input:checked + .slider::before { transform: translateX(16px); background: var(--fg-inverse); }
+  .proxy-text { font-size: 13px; font-weight: 500; line-height: 1.6; }
+  .proxy-text small { color: var(--text-dim); font-weight: 400; margin-left: var(--sp-2); font-size: 12px; }
+
+  /* ---------- 状态区 ---------- */
+  .status { margin-top: var(--sp-6); max-width: 640px; width: 100%; text-align: center; }
+  .spinner {
+    display: inline-block; width: 26px; height: 26px;
+    border: 2px solid var(--border); border-top-color: var(--fg);
+    border-radius: 50%;
+    animation: spin .7s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .status .msg { margin-top: var(--sp-3); color: var(--text-dim); font-size: 13px; }
+  .error-box {
+    background: var(--danger-bg);
+    border: 1px solid var(--danger);
+    color: var(--danger);
+    border-radius: var(--radius);
+    padding: var(--sp-3) var(--sp-4); font-size: 13.5px; line-height: 1.7;
+    text-align: left;
+  }
+
+  /* ---------- 结果区 ---------- */
+  .result {
+    width: 100%; max-width: 760px; margin-top: var(--sp-6);
+    display: flex; flex-direction: column; gap: var(--sp-5);
+    animation: rise .3s ease both;
+  }
+  @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+  .tweet-meta {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: var(--sp-4) var(--sp-5);
+  }
+  .tweet-meta .author { font-weight: 600; font-size: 14px; letter-spacing: -0.01em; }
+  .tweet-meta .author span { color: var(--text-dim); font-weight: 400; margin-left: var(--sp-2); }
+  .tweet-meta .text { color: var(--text-dim); font-size: 13.5px; margin-top: var(--sp-2); line-height: 1.8; white-space: pre-wrap; word-break: break-word; }
+
+  .video-card {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: var(--radius); overflow: hidden;
+  }
+  .video-card video { width: 100%; max-height: 460px; background: #000; display: block; }
+  .video-body { padding: var(--sp-4) var(--sp-5) var(--sp-5); }
+  .video-title { font-size: 14px; font-weight: 600; margin-bottom: var(--sp-1); word-break: break-word; line-height: 1.6; letter-spacing: -0.01em; }
+  .video-sub { color: var(--text-dim); font-size: 12.5px; margin-bottom: var(--sp-1); }
+  .player-fallback {
+    margin-top: var(--sp-3); padding: var(--sp-3) var(--sp-4);
+    background: var(--warn-bg);
+    border: 1px solid var(--warn-border);
+    border-radius: var(--radius);
+    color: var(--warn-text); font-size: 12.5px; line-height: 2.2;
+  }
+  .player-fallback a { margin-left: var(--sp-2); }
+
+  .fmt-table { width: 100%; border-collapse: collapse; margin-top: var(--sp-3); }
+  .fmt-table th, .fmt-table td {
+    padding: var(--sp-3) var(--sp-2); font-size: 13px; text-align: left;
+    border-top: 1px solid var(--border);
+  }
+  .fmt-table th {
+    color: var(--text-dim); font-weight: 500; font-size: 11px;
+    text-transform: uppercase; letter-spacing: 0.06em; border-top: none;
+    padding-bottom: var(--sp-2);
+  }
+  .fmt-table td:first-child { font-variant-numeric: tabular-nums; }
+  .fmt-actions { display: flex; gap: var(--sp-2); justify-content: flex-end; flex-wrap: wrap; }
+  .mini-btn {
+    border: 1px solid var(--border); border-radius: 6px;
+    background: transparent; color: var(--fg);
+    font-size: 12.5px; padding: 6px var(--sp-3); cursor: pointer;
+    transition: border-color .15s, background .15s;
+    text-decoration: none; display: inline-block;
+  }
+  .mini-btn:hover { background: var(--card-hover); border-color: var(--border-strong); }
+  .mini-btn.primary {
+    background: var(--fg); border-color: var(--fg);
+    color: var(--fg-inverse); font-weight: 500;
+  }
+  .mini-btn.primary:hover { opacity: .82; background: var(--fg); }
+  .badge {
+    display: inline-block; font-size: 10.5px; font-weight: 500;
+    padding: 2px var(--sp-2); border-radius: 4px; margin-left: var(--sp-2);
+    border: 1px solid var(--success); color: var(--success);
+    vertical-align: 1px;
+  }
+  .dl-tip {
+    color: var(--text-dim); font-size: 12px; line-height: 1.9;
+    margin-top: var(--sp-4); padding-top: var(--sp-3); border-top: 1px solid var(--border);
+  }
+
+  .copied-tip {
+    position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%);
+    background: var(--fg); color: var(--fg-inverse); font-size: 13px; font-weight: 500;
+    padding: 9px 20px; border-radius: var(--radius);
+    opacity: 0; pointer-events: none; transition: opacity .2s;
+    z-index: 60;
+  }
+  .copied-tip.show { opacity: 1; }
+
+  @media (max-width: 560px) {
+    body { padding-top: 80px; }
+    .search-box { flex-direction: column; }
+    .fmt-table th:nth-child(2), .fmt-table td:nth-child(2) { display: none; }
+    .brand h1 { font-size: 14px; }
+  }
+</style>
+</head>
+<body>
+  <div class="toolbar">
+    <div class="brand">
+      <span class="logo-badge">
+        <svg viewBox="0 0 24 24"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>
+      </span>
+      <h1 data-i18n="title">推特视频下载器</h1>
+    </div>
+    <div class="toolbar-actions">
+      <select id="lang-select" class="lang-select" aria-label="Language">
+        <option value="zh">中文</option>
+        <option value="en">English</option>
+      </select>
+      <button id="theme-btn" class="tool-btn" aria-label="Theme"></button>
+    </div>
+  </div>
+
+  <div class="hero">
+    <span class="eyebrow">X / Twitter · MP4 · HD</span>
+    <h2 class="hero-title">Twitter Video<br><span class="dim">Downloader</span></h2>
+    <p class="subtitle" data-i18n="subtitle">粘贴推文链接, 一键解析出视频直链 — 支持在线播放和多清晰度下载</p>
+  </div>
+
+  <div class="search-box">
+    <input id="url-input" type="url" placeholder="https://x.com/..." autocomplete="off" spellcheck="false">
+    <button id="parse-btn" class="btn" data-i18n="parseBtn">解析</button>
+  </div>
+  <p class="hint" data-i18n-html="hint">支持 <code>x.com</code> / <code>twitter.com</code> / <code>mobile.twitter.com</code> 的视频、GIF 推文链接</p>
+
+  <label class="proxy-row" id="proxy-row">
+    <span class="switch">
+      <input type="checkbox" id="proxy-toggle">
+      <span class="slider"></span>
+    </span>
+    <span class="proxy-text"><span data-i18n="proxyLabel">服务器中转</span> <small id="proxy-desc"></small></span>
+  </label>
+
+  <div id="status" class="status" hidden></div>
+  <div id="result" class="result" hidden></div>
+  <div id="copied-tip" class="copied-tip" data-i18n="copied">链接已复制到剪贴板</div>
+
+<script>
+/* ============ 国际化 ============ */
+const I18N = {
+  zh: {
+    htmlLang: 'zh-CN',
+    pageTitle: '推特视频下载器 - 在线解析 X/Twitter 视频',
+    title: '推特视频下载器',
+    subtitle: '粘贴推文链接, 一键解析出视频直链 — 支持在线播放和多清晰度下载',
+    parseBtn: '解析',
+    placeholder: 'https://x.com/用户名/status/1234567890...',
+    hint: '支持 <code>x.com</code> / <code>twitter.com</code> / <code>mobile.twitter.com</code> 的视频、GIF 推文链接',
+    proxyLabel: '服务器中转',
+    proxyOn: '已开启: 播放/下载经服务器中转, 无需 VPN (消耗服务器流量)',
+    proxyOff: '已关闭: 播放/下载直连推特 CDN, 需要您的网络能访问推特',
+    proxyTitle: '默认直连推特 CDN(需要您的网络能访问 video.twimg.com); 打开后播放和下载都经服务器中转, 无需 VPN 也能用, 但会消耗服务器流量',
+    parsing: '正在解析推文, 请稍候…',
+    parseFail: '解析失败',
+    fallbackText: '⚠ 页面内播放失败。若您的网络无法直连推特 CDN, 请打开顶部的"服务器中转"开关后重试; 也可能是广告拦截插件误杀, 可尝试',
+    newTabPlay: '在新标签页播放',
+    duration: '时长',
+    routeLabel: '当前线路',
+    routeDirect: '直连推特 CDN',
+    routeProxy: '服务器中转',
+    videoN: '视频',
+    thResolution: '清晰度',
+    thSize: '大小',
+    thActions: '操作',
+    best: '最高清',
+    play: '播放',
+    copy: '复制直链',
+    download: '下载',
+    copied: '链接已复制到剪贴板',
+    tipDirect: '提示: 当前为直连模式, 下载不经过服务器。如果点击后浏览器打开了在线播放, 在视频上右键"另存为"(或播放器菜单里选下载)即可保存; 手机端长按视频保存。',
+    tipProxy: '提示: 当前为服务器中转模式, 点击下载会直接弹出"另存为", 播放和下载流量经过服务器。',
+  },
+  en: {
+    htmlLang: 'en',
+    pageTitle: 'Twitter Video Downloader - Parse X/Twitter Videos Online',
+    title: 'Twitter Video Downloader',
+    subtitle: 'Paste a tweet link to extract direct video URLs — watch online or download in multiple resolutions',
+    parseBtn: 'Parse',
+    placeholder: 'https://x.com/username/status/1234567890...',
+    hint: 'Supports video & GIF tweets from <code>x.com</code> / <code>twitter.com</code> / <code>mobile.twitter.com</code>',
+    proxyLabel: 'Server Relay',
+    proxyOn: 'ON: playback/download relayed through our server, no VPN needed (uses server bandwidth)',
+    proxyOff: 'OFF: playback/download connects directly to Twitter CDN (your network must reach Twitter)',
+    proxyTitle: 'By default the browser connects directly to the Twitter CDN (video.twimg.com). Turn this on to relay playback and downloads through the server - works without VPN but consumes server bandwidth',
+    parsing: 'Parsing tweet, please wait…',
+    parseFail: 'Failed to parse',
+    fallbackText: '⚠ In-page playback failed. If your network cannot reach the Twitter CDN, turn on the "Server Relay" switch above and retry. It may also be blocked by an ad-blocker — you can try',
+    newTabPlay: 'Open in new tab',
+    duration: 'Duration',
+    routeLabel: 'Route',
+    routeDirect: 'Direct to Twitter CDN',
+    routeProxy: 'Server relay',
+    videoN: 'Video',
+    thResolution: 'Resolution',
+    thSize: 'Size',
+    thActions: 'Actions',
+    best: 'Best',
+    play: 'Play',
+    copy: 'Copy URL',
+    download: 'Download',
+    copied: 'Link copied to clipboard',
+    tipDirect: 'Tip: direct mode — downloads bypass our server. If the browser opens the video instead of saving, right-click the video and choose "Save as" (long-press on mobile).',
+    tipProxy: 'Tip: server relay mode — the download button triggers "Save as" directly; playback and download traffic goes through the server.',
+  },
+};
+let lang = localStorage.getItem('lang') || 'zh';
+const t = key => (I18N[lang] && I18N[lang][key]) || I18N.zh[key] || key;
+
+/* ============ 元素引用 ============ */
+const $input = document.getElementById('url-input');
+const $btn = document.getElementById('parse-btn');
+const $status = document.getElementById('status');
+const $result = document.getElementById('result');
+const $tip = document.getElementById('copied-tip');
+const $proxyToggle = document.getElementById('proxy-toggle');
+const $proxyDesc = document.getElementById('proxy-desc');
+const $proxyRow = document.getElementById('proxy-row');
+const $themeBtn = document.getElementById('theme-btn');
+const $langSelect = document.getElementById('lang-select');
+
+/* ============ 主题(白天/黑夜) ============ */
+const ICON_MOON = '<svg viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>';
+const ICON_SUN = '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2.5M12 19.5V22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M2 12h2.5M19.5 12H22M4.9 19.1l1.8-1.8M17.3 6.7l1.8-1.8"/></svg>';
+let theme = localStorage.getItem('theme')
+  || (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+applyTheme();
+$themeBtn.addEventListener('click', () => {
+  theme = theme === 'dark' ? 'light' : 'dark';
+  localStorage.setItem('theme', theme);
+  applyTheme();
+});
+function applyTheme() {
+  document.documentElement.dataset.theme = theme;
+  $themeBtn.innerHTML = theme === 'dark' ? ICON_SUN : ICON_MOON;
+}
+
+/* ============ 语言切换 ============ */
+$langSelect.value = lang;
+$langSelect.addEventListener('change', () => {
+  lang = $langSelect.value;
+  localStorage.setItem('lang', lang);
+  applyI18n();
+  if (lastData) { $result.innerHTML = ''; render(lastData); }
+});
+function applyI18n() {
+  document.documentElement.lang = t('htmlLang');
+  document.title = t('pageTitle');
+  document.querySelectorAll('[data-i18n]').forEach(el => { el.textContent = t(el.dataset.i18n); });
+  document.querySelectorAll('[data-i18n-html]').forEach(el => { el.innerHTML = t(el.dataset.i18nHtml); });
+  $input.placeholder = t('placeholder');
+  $proxyRow.title = t('proxyTitle');
+  updateProxyDesc();
+}
+
+/* ============ 服务器中转开关 ============ */
+let useProxy = localStorage.getItem('useProxy') === '1';
+let lastData = null;
+$proxyToggle.checked = useProxy;
+
+$proxyToggle.addEventListener('change', () => {
+  useProxy = $proxyToggle.checked;
+  localStorage.setItem('useProxy', useProxy ? '1' : '0');
+  updateProxyDesc();
+  if (lastData) { $result.innerHTML = ''; render(lastData); }
+});
+
+function updateProxyDesc() {
+  $proxyDesc.textContent = useProxy ? t('proxyOn') : t('proxyOff');
+}
+
+function playUrlOf(cdnUrl) {
+  return useProxy ? `/api/stream?url=${encodeURIComponent(cdnUrl)}` : cdnUrl;
+}
+function downloadHrefOf(cdnUrl, filename) {
+  return useProxy
+    ? `/api/download?url=${encodeURIComponent(cdnUrl)}&filename=${encodeURIComponent(filename)}`
+    : cdnUrl;
+}
+
+applyI18n();
+
+/* ============ 解析 ============ */
+$btn.addEventListener('click', parse);
+$input.addEventListener('keydown', e => { if (e.key === 'Enter') parse(); });
+// 支持粘贴后自动解析
+$input.addEventListener('paste', () => setTimeout(() => {
+  if (/\/status(es)?\/\d+/.test($input.value)) parse();
+}, 50));
+
+function showStatus(html) { $status.hidden = false; $status.innerHTML = html; }
+function hideStatus() { $status.hidden = true; }
+
+async function parse() {
+  const url = $input.value.trim();
+  if (!url) { $input.focus(); return; }
+
+  $btn.disabled = true;
+  $result.hidden = true;
+  $result.innerHTML = '';
+  showStatus(`<div class="spinner"></div><div class="msg">${t('parsing')}</div>`);
+
+  try {
+    const resp = await fetch('/api/parse', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url }),
+    });
+    const json = await resp.json();
+    if (!json.ok) throw new Error(json.error || t('parseFail'));
+    hideStatus();
+    lastData = json.data;
+    render(json.data);
+  } catch (err) {
+    showStatus(`<div class="error-box">${escapeHtml(err.message)}</div>`);
+  } finally {
+    $btn.disabled = false;
+  }
+}
+
+/* ============ 渲染结果 ============ */
+function render(data) {
+  const frag = document.createDocumentFragment();
+
+  if (data.uploader || data.description) {
+    const meta = document.createElement('div');
+    meta.className = 'tweet-meta';
+    meta.innerHTML = `
+      <div class="author">${escapeHtml(data.uploader || '')}
+        <span>@${escapeHtml(data.uploader_id || '')}</span></div>
+      <div class="text">${escapeHtml(data.description || '')}</div>`;
+    frag.appendChild(meta);
+  }
+
+  data.videos.forEach((video, i) => {
+    const card = document.createElement('div');
+    card.className = 'video-card';
+
+    const player = document.createElement('video');
+    player.controls = true;
+    // 不预加载: 等用户点播放再请求视频, 避免页面一打开就触发跨站请求被拦截
+    player.preload = 'none';
+    player.playsInline = true;
+    player.referrerPolicy = 'no-referrer';
+    if (video.thumbnail) player.poster = video.thumbnail;
+    card.appendChild(player);
+
+    const durationPart = video.duration ? `${t('duration')} ${fmtDuration(video.duration)} · ` : '';
+    const body = document.createElement('div');
+    body.className = 'video-body';
+    body.innerHTML = `
+      <div class="video-title">${escapeHtml(video.title)}${data.videos.length > 1 ? ` (${t('videoN')} ${i+1})` : ''}</div>
+      <div class="video-sub">${durationPart}${t('routeLabel')}: ${useProxy ? t('routeProxy') : t('routeDirect')}</div>
+      <div class="player-fallback" hidden>
+        ${t('fallbackText')}
+        <a class="mini-btn primary" href="#" target="_blank" rel="noopener noreferrer">${t('newTabPlay')}</a>
+      </div>`;
+
+    const fallbackBox = body.querySelector('.player-fallback');
+    const fallbackLink = fallbackBox.querySelector('a');
+
+    // 根据开关决定播放走直连 CDN 还是服务器中转
+    const setSrc = (cdnUrl, autoplay) => {
+      player.dataset.cdnUrl = cdnUrl;
+      player.dataset.retried = '';
+      fallbackLink.href = cdnUrl;
+      fallbackBox.hidden = true;
+      player.src = playUrlOf(cdnUrl);
+      if (autoplay) player.play().catch(() => {});
+    };
+    player.addEventListener('error', () => {
+      // 偶发网络抖动: 延迟 1.5 秒自动重试一次
+      if (!player.dataset.retried) {
+        player.dataset.retried = '1';
+        const tPos = player.currentTime;
+        setTimeout(() => {
+          player.src = playUrlOf(player.dataset.cdnUrl);
+          player.addEventListener('loadedmetadata', () => { if (tPos > 0) player.currentTime = tPos; }, { once: true });
+          player.play().catch(() => {});
+        }, 1500);
+        return;
+      }
+      fallbackBox.hidden = false;
+    });
+    setSrc(video.best.url, false);
+
+    const table = document.createElement('table');
+    table.className = 'fmt-table';
+    table.innerHTML = `<thead><tr><th>${t('thResolution')}</th><th>${t('thSize')}</th><th style="text-align:right">${t('thActions')}</th></tr></thead>`;
+    const tbody = document.createElement('tbody');
+
+    const mp4s = video.formats.filter(f => !f.is_hls);
+    (mp4s.length ? mp4s : video.formats).forEach((f, idx) => {
+      const tr = document.createElement('tr');
+      const filename = `${(data.uploader_id || 'twitter')}_${data.tweet_id || ''}_${f.resolution}.mp4`;
+      tr.innerHTML = `
+        <td>${escapeHtml(f.resolution)}${idx === 0 ? `<span class="badge">${t('best')}</span>` : ''}</td>
+        <td>${f.filesize ? fmtSize(f.filesize) : (f.tbr ? Math.round(f.tbr) + ' kbps' : '—')}</td>
+        <td><div class="fmt-actions">
+          <button class="mini-btn" data-play="${escapeAttr(f.url)}">${t('play')}</button>
+          <button class="mini-btn" data-copy="${escapeAttr(f.url)}">${t('copy')}</button>
+          <a class="mini-btn" href="${escapeAttr(downloadHrefOf(f.url, filename))}" download="${escapeAttr(filename)}"
+             target="_blank" rel="noopener noreferrer">${t('download')}</a>
+        </div></td>`;
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    const dlTip = document.createElement('div');
+    dlTip.className = 'dl-tip';
+    dlTip.textContent = useProxy ? t('tipProxy') : t('tipDirect');
+    body.appendChild(table);
+    body.appendChild(dlTip);
+    card.appendChild(body);
+
+    card.addEventListener('click', e => {
+      const playUrl = e.target.dataset?.play;
+      const copyUrl = e.target.dataset?.copy;
+      if (playUrl) {
+        setSrc(playUrl, true);
+        player.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      } else if (copyUrl) {
+        navigator.clipboard.writeText(copyUrl).then(() => {
+          $tip.classList.add('show');
+          setTimeout(() => $tip.classList.remove('show'), 1600);
+        });
+      }
+    });
+
+    frag.appendChild(card);
+  });
+
+  $result.appendChild(frag);
+  $result.hidden = false;
+}
+
+/* ============ 工具函数 ============ */
+function fmtSize(bytes) {
+  if (bytes >= 1048576) return (bytes / 1048576).toFixed(1) + ' MB';
+  return (bytes / 1024).toFixed(0) + ' KB';
+}
+function fmtDuration(sec) {
+  sec = Math.round(sec);
+  const m = Math.floor(sec / 60), s = sec % 60;
+  return m + ':' + String(s).padStart(2, '0');
+}
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c =>
+    ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+}
+function escapeAttr(s) { return escapeHtml(s); }
+</script>
+</body>
+</html>
